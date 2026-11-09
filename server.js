@@ -4,7 +4,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const TARGET = 'https://roblox.com';
+const TARGET = 'https://xplay.better16.wtf';
 
 // Serve local static files (index.html, etc.)
 app.use(express.static(path.join(__dirname, 'public')));
