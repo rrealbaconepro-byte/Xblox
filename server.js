@@ -1,27 +1,43 @@
 
 const express = require('express');
-const path = require('path');
 const admin = require('firebase-admin');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const mime = require('mime-types');
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 
-// GitHub repository
-const GITHUB_OWNER = 'rrealbaconepro-byte';
-const GITHUB_REPO = 'Xblox';
-const GITHUB_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`;
+// GitHub configuration
+const OWNER = 'rrealbaconepro-byte';
+const REPO = 'Xblox';
+const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
 
-// Reverse proxy
 const TARGET = 'https://xplay.better16.wtf';
 
-// Cache
-let cachedHTML = null;
-let lastFetch = 0;
-const CACHE_DURATION = 60 * 1000;
+// Cache settings
+const CACHE_TIME = 60 * 1000;
+let cachedTree = null;
+let lastTreeFetch = 0;
+let indexPath = null;
+let baseDirectory = '';
 
-// Firebase initialization
+const fileCache = new Map();
+
+// GitHub headers
+function githubHeaders() {
+    const headers = {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Xblox-Server'
+    };
+
+    if (process.env.GITHUB_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    return headers;
+}
+
+// Firebase
 let firebaseConnected = false;
 
 try {
@@ -37,55 +53,35 @@ try {
         }
 
         firebaseConnected = true;
-
-        console.log('[FIREBASE] Connected successfully');
-    } else {
-        console.log('[FIREBASE] No service account configured');
+        console.log('[FIREBASE] Connected');
     }
 } catch (error) {
-    console.error('[FIREBASE] Initialization failed:', error.message);
+    console.error('[FIREBASE ERROR]', error.message);
 }
 
-// Firebase references
-const db = firebaseConnected
-    ? admin.firestore()
-    : null;
+const db = firebaseConnected ? admin.firestore() : null;
+const auth = firebaseConnected ? admin.auth() : null;
 
-const auth = firebaseConnected
-    ? admin.auth()
-    : null;
-
-// Find index.html anywhere in the repository
-async function getGitHubHTML() {
-    const now = Date.now();
-
-    if (cachedHTML && now - lastFetch < CACHE_DURATION) {
-        return cachedHTML;
+// Retrieve complete GitHub repository tree
+async function getRepositoryTree() {
+    if (cachedTree && Date.now() - lastTreeFetch < CACHE_TIME) {
+        return cachedTree;
     }
 
-    const headers = {
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': 'Xblox-Server'
-    };
+    const response = await fetch(API, {
+        headers: githubHeaders()
+    });
 
-    if (process.env.GITHUB_TOKEN) {
-        headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    if (!response.ok) {
+        throw new Error(`GitHub repository error: ${response.status}`);
     }
 
-    // Get repository information
-    const repoResponse = await fetch(GITHUB_API, { headers });
+    const repository = await response.json();
+    const branch = repository.default_branch;
 
-    if (!repoResponse.ok) {
-        throw new Error(`GitHub repository error: ${repoResponse.status}`);
-    }
-
-    const repo = await repoResponse.json();
-    const branch = repo.default_branch;
-
-    // Search repository files
     const treeResponse = await fetch(
-        `${GITHUB_API}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
-        { headers }
+        `${API}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
+        { headers: githubHeaders() }
     );
 
     if (!treeResponse.ok) {
@@ -95,88 +91,111 @@ async function getGitHubHTML() {
     const tree = await treeResponse.json();
 
     if (tree.truncated) {
-        throw new Error('GitHub repository tree is too large');
+        throw new Error('GitHub repository is too large');
     }
 
-    // Find index.html, preferring the repository root
-    const files = tree.tree.filter(file =>
-        file.type === 'blob' &&
-        file.path.toLowerCase().endsWith('index.html')
-    );
+    const files = tree.tree.filter(file => file.type === 'blob');
 
-    files.sort((a, b) => {
-        if (a.path === 'index.html') return -1;
-        if (b.path === 'index.html') return 1;
-        return a.path.length - b.path.length;
-    });
+    const htmlFiles = files
+        .filter(file => file.path.toLowerCase().endsWith('index.html'))
+        .sort((a, b) => {
+            if (a.path === 'index.html') return -1;
+            if (b.path === 'index.html') return 1;
+            return a.path.length - b.path.length;
+        });
 
-    if (!files.length) {
-        throw new Error('index.html was not found in Xblox');
+    if (!htmlFiles.length) {
+        throw new Error('index.html not found');
     }
 
-    const selectedFile = files[0];
+    indexPath = htmlFiles[0].path;
+    baseDirectory = indexPath.includes('/')
+        ? indexPath.substring(0, indexPath.lastIndexOf('/'))
+        : '';
 
-    console.log(`[GITHUB] Found ${selectedFile.path}`);
+    cachedTree = {
+        branch,
+        files: new Map(files.map(file => [file.path, file]))
+    };
 
-    // Download HTML
-    const rawURL =
-        `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${encodeURIComponent(branch)}/${selectedFile.path.split('/').map(encodeURIComponent).join('/')}`;
+    lastTreeFetch = Date.now();
 
-    const htmlResponse = await fetch(rawURL);
+    console.log('[GITHUB] Repository loaded');
+    console.log('[GITHUB] Branch:', branch);
+    console.log('[GITHUB] Website:', indexPath);
+    console.log('[GITHUB] Files:', files.length);
 
-    if (!htmlResponse.ok) {
-        throw new Error(`HTML download failed: ${htmlResponse.status}`);
-    }
-
-    cachedHTML = await htmlResponse.text();
-    lastFetch = now;
-
-    console.log('[GITHUB] index.html downloaded successfully');
-
-    return cachedHTML;
+    return cachedTree;
 }
 
-// Local static files
-app.use(express.static(path.join(__dirname, 'public')));
+// Retrieve any file from GitHub
+async function getGitHubFile(filePath, tree) {
+    const file = tree.files.get(filePath);
+
+    if (!file) {
+        return null;
+    }
+
+    if (fileCache.has(file.sha)) {
+        return fileCache.get(file.sha);
+    }
+
+    const encodedBranch = tree.branch
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/');
+
+    const encodedPath = filePath
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/');
+
+    const url =
+        `https://raw.githubusercontent.com/${OWNER}/${REPO}/${encodedBranch}/${encodedPath}`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(`GitHub file error: ${response.status}`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    fileCache.set(file.sha, buffer);
+
+    return buffer;
+}
+
+// GitHub status
+app.get('/api/github-status', async (req, res) => {
+    try {
+        const tree = await getRepositoryTree();
+
+        res.json({
+            connected: true,
+            repository: `${OWNER}/${REPO}`,
+            branch: tree.branch,
+            index: indexPath,
+            files: tree.files.size
+        });
+    } catch (error) {
+        res.status(503).json({
+            connected: false,
+            error: error.message
+        });
+    }
+});
 
 // Firebase status
 app.get('/api/firebase-status', (req, res) => {
     res.json({
-        service: 'Xblox Firebase',
         connected: firebaseConnected,
         firestore: !!db,
         authentication: !!auth
     });
 });
 
-// Firebase test endpoint
-app.get('/api/firebase-test', async (req, res) => {
-    if (!db) {
-        return res.status(503).json({
-            error: 'Firebase is not configured'
-        });
-    }
-
-    try {
-        await db.collection('xblox_system').doc('connection').set({
-            status: 'online',
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        res.json({
-            success: true,
-            message: 'Firebase Firestore connection successful'
-        });
-    } catch (error) {
-        console.error('[FIREBASE]', error.message);
-
-        res.status(500).json({
-            error: 'Firebase connection failed'
-        });
-    }
-});
-
-// XPlay reverse proxy
+// XPlay proxy
 app.use('/proxy', createProxyMiddleware({
     target: TARGET,
     changeOrigin: true,
@@ -195,7 +214,7 @@ app.use('/proxy', createProxyMiddleware({
         },
 
         error: (err, req, res) => {
-            console.error('[PROXY]', err.message);
+            console.error('[PROXY ERROR]', err.message);
 
             if (res && !res.headersSent) {
                 res.status(502).send('Xblox Proxy Error');
@@ -204,18 +223,66 @@ app.use('/proxy', createProxyMiddleware({
     }
 }));
 
-// Serve GitHub index.html
+// Serve the complete GitHub website
 app.get('*', async (req, res) => {
     try {
-        const html = await getGitHubHTML();
+        const tree = await getRepositoryTree();
 
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache');
+        let requestedPath;
 
-        res.send(html);
+        try {
+            requestedPath = decodeURIComponent(req.path);
+        } catch {
+            return res.status(400).send('Invalid URL');
+        }
+
+        requestedPath = requestedPath.replace(/^\/+/, '');
+
+        if (
+            requestedPath.includes('\\') ||
+            requestedPath.split('/').includes('..')
+        ) {
+            return res.status(400).send('Invalid path');
+        }
+
+        // Root displays index.html
+        if (!requestedPath || requestedPath === 'index.html') {
+            requestedPath = indexPath;
+        } else {
+            requestedPath = baseDirectory
+                ? `${baseDirectory}/${requestedPath}`
+                : requestedPath;
+        }
+
+        // Support SPA routes
+        if (
+            !tree.files.has(requestedPath) &&
+            !require('path').posix.extname(requestedPath)
+        ) {
+            requestedPath = indexPath;
+        }
+
+        const file = await getGitHubFile(requestedPath, tree);
+
+        if (!file) {
+            return res.status(404).send('404 - File Not Found');
+        }
+
+        const contentType = mime.lookup(requestedPath) ||
+            'application/octet-stream';
+
+        res.setHeader('Content-Type', contentType);
+
+        if (requestedPath === indexPath) {
+            res.setHeader('Cache-Control', 'no-cache');
+        } else {
+            res.setHeader('Cache-Control', 'public, max-age=60');
+        }
+
+        res.send(file);
 
     } catch (error) {
-        console.error('[GITHUB ERROR]', error.message);
+        console.error('[XBLOX ERROR]', error.message);
 
         res.status(503).send(`
             <!DOCTYPE html>
@@ -225,7 +292,7 @@ app.get('*', async (req, res) => {
             </head>
             <body>
                 <h1>503 Service Unavailable</h1>
-                <p>Xblox could not retrieve index.html from GitHub.</p>
+                <p>Unable to retrieve the Xblox website from GitHub.</p>
                 <p>Please try again later.</p>
             </body>
             </html>
@@ -233,12 +300,13 @@ app.get('*', async (req, res) => {
     }
 });
 
+// Start server
 app.listen(PORT, () => {
     console.log('================================');
-    console.log('       XBLOX SERVER');
+    console.log('          XBLOX SERVER');
     console.log('================================');
-    console.log(`Port: ${PORT}`);
-    console.log(`GitHub: ${GITHUB_OWNER}/${GITHUB_REPO}`);
-    console.log(`Firebase: ${firebaseConnected ? 'Connected' : 'Not configured'}`);
+    console.log('Port:', PORT);
+    console.log('GitHub:', `${OWNER}/${REPO}`);
+    console.log('Firebase:', firebaseConnected ? 'Connected' : 'Not configured');
     console.log('================================');
 });
