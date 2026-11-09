@@ -1,55 +1,55 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#000000">
-  <title>Xblox</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #000;
-    }
-
-    #xplay {
-      width: 100%;
-      height: 100%;
-      border: 0;
-      display: block;
-      background: #000;
-    }
-
-    #loading {
-      position: fixed;
-      inset: 0;
-      display: grid;
-      place-items: center;
-      color: white;
-      background: #000;
-      font: 15px Arial, sans-serif;
-      z-index: 1;
-      pointer-events: none;
-    }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111318">
+  <title>Xbox WebPlayer</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="loading">Loading Xblox...</div>
-
-  <iframe
-    id="xplay"
-    src="/proxy/"
-    allow="autoplay; fullscreen; clipboard-write"
-    allowfullscreen
-    onload="document.getElementById('loading').style.display='none'">
-  </iframe>
+  <main class="shell">
+    <header class="topbar">
+      <span class="status-dot"></span>
+      <span>WEB PLAYER</span>
+      <span class="spacer"></span>
+      <span id="connection">Connecting…</span>
+    </header>
+    <section class="player">
+      <div id="loading" class="message">
+        <div class="spinner"></div>
+        <h1>Starting player</h1>
+        <p id="status">Checking server connection…</p>
+      </div>
+      <canvas id="game" aria-label="Game display"></canvas>
+      <div id="error" class="error" hidden></div>
+    </section>
+    <footer>
+      <span>Use your keyboard or connected controller.</span>
+      <span id="server-status">Server status: checking</span>
+    </footer>
+  </main>
+  <script src="/js/player-cache.js"></script>
+  <script src="/js/console.js"></script>
+  <script>
+    (async () => {
+      const status = document.getElementById("status");
+      const connection = document.getElementById("connection");
+      const serverStatus = document.getElementById("server-status");
+      try {
+        const response = await fetch("/health", { cache: "no-store" });
+        if (!response.ok) throw new Error("Server returned " + response.status);
+        const data = await response.json();
+        connection.textContent = "Connected";
+        serverStatus.textContent = "Server status: online";
+        status.textContent = "Server is online. The game client must be provided by the upstream player files.";
+        document.getElementById("loading").classList.add("ready");
+      } catch (error) {
+        connection.textContent = "Offline";
+        serverStatus.textContent = "Server status: unavailable";
+        status.textContent = error.message;
+      }
+    })();
+  </script>
 </body>
 </html>
