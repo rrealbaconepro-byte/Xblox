@@ -1,0 +1,16 @@
+{
+  "name": "xplay-proxy",
+  "version": "1.0.0",
+  "description": "Reverse proxy for xplay.better16.wtf",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "http-proxy-middleware": "^3.0.2"
+  }
+}
