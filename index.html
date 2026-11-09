@@ -1,38 +1,55 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>XPlay</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Xblox</title>
   <style>
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
+
     html, body {
       width: 100%;
       height: 100%;
       overflow: hidden;
       background: #000;
     }
-    iframe {
+
+    #xplay {
       width: 100%;
       height: 100%;
-      border: none;
+      border: 0;
       display: block;
+      background: #000;
+    }
+
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: #000;
+      font: 15px Arial, sans-serif;
+      z-index: 1;
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
-  <!-- 
-    Option 1 (default): load the site directly 
-    Option 2: use the proxy → change src to "/proxy/"
-  -->
-  <iframe 
-    src="https://xplay.better16.wtf/" 
-    allowfullscreen
+  <div id="loading">Loading Xblox...</div>
+
+  <iframe
+    id="xplay"
+    src="/proxy/"
     allow="autoplay; fullscreen; clipboard-write"
-  ></iframe>
+    allowfullscreen
+    onload="document.getElementById('loading').style.display='none'">
+  </iframe>
 </body>
 </html>
