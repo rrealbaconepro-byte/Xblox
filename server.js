@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 10000;
 
 const OWNER = "rrealbaconepro-byte";
 const REPO = "Xblox";
-const TARGET = "https://xplay.better16.wtf";
+const TARGET = "https://youtube.com";
 const GITHUB_API = `https://api.github.com/repos/${OWNER}/${REPO}`;
 
 const CACHE_DURATION = 60 * 1000;
