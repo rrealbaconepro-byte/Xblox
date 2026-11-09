@@ -2,7 +2,7 @@
 {
   "name": "xplay-proxy",
   "version": "1.0.0",
-  "description": "Display Xblox through your own server",
+  "description": "Full Xblox website powered by GitHub",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -13,6 +13,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "http-proxy-middleware": "^3.0.3",
-    "firebase-admin": "^13.0.0"
+    "firebase-admin": "^13.0.0",
+    "mime-types": "^2.1.35"
   }
 }
