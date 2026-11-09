@@ -1,8 +1,7 @@
-
 {
   "name": "xplay-proxy",
   "version": "1.0.0",
-  "description": "Full Xblox website powered by GitHub",
+  "description": "Xblox website and XPlay proxy",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
