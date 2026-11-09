@@ -11,14 +11,15 @@ const {
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// =====================================
+// ==========================================
 // CONFIGURATION
-// =====================================
+// ==========================================
 
 const OWNER = "rrealbaconepro-byte";
 const REPO = "Xblox";
 const TARGET = "https://xplay.better16.wtf";
 const GITHUB_API = `https://api.github.com/repos/${OWNER}/${REPO}`;
+
 const CACHE_DURATION = 60 * 1000;
 
 let cachedTree = null;
@@ -28,11 +29,11 @@ let baseDirectory = "";
 
 const fileCache = new Map();
 
-// =====================================
+// ==========================================
 // CROSS-ORIGIN ISOLATION
-// =====================================
+// ==========================================
 
-function setIsolationHeaders(res) {
+app.use((req, res, next) => {
   res.setHeader(
     "Cross-Origin-Opener-Policy",
     "same-origin"
@@ -42,17 +43,13 @@ function setIsolationHeaders(res) {
     "Cross-Origin-Embedder-Policy",
     "require-corp"
   );
-}
 
-// Apply to normal Xblox responses
-app.use((req, res, next) => {
-  setIsolationHeaders(res);
   next();
 });
 
-// =====================================
+// ==========================================
 // FIREBASE
-// =====================================
+// ==========================================
 
 let firebaseConnected = false;
 let db = null;
@@ -76,15 +73,15 @@ try {
 
     console.log("[FIREBASE] Connected");
   } else {
-    console.log("[FIREBASE] No credentials configured");
+    console.log("[FIREBASE] Credentials not configured");
   }
 } catch (error) {
   console.error("[FIREBASE ERROR]", error.message);
 }
 
-// =====================================
-// GITHUB HEADERS
-// =====================================
+// ==========================================
+// GITHUB
+// ==========================================
 
 function githubHeaders() {
   const headers = {
@@ -93,15 +90,12 @@ function githubHeaders() {
   };
 
   if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    headers.Authorization =
+      `Bearer ${process.env.GITHUB_TOKEN}`;
   }
 
   return headers;
 }
-
-// =====================================
-// GET GITHUB REPOSITORY TREE
-// =====================================
 
 async function getRepositoryTree() {
   if (
@@ -118,31 +112,28 @@ async function getRepositoryTree() {
   });
 
   if (!repoResponse.ok) {
-    const details = await repoResponse.text();
-
     throw new Error(
-      `GitHub repository error ${repoResponse.status}: ${details}`
+      `GitHub repository error: ${repoResponse.status}`
     );
   }
 
   const repository = await repoResponse.json();
-  const branch = repository.default_branch;
 
   const treeResponse = await fetch(
-    `${GITHUB_API}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
+    `${GITHUB_API}/git/trees/${encodeURIComponent(repository.default_branch)}?recursive=1`,
     { headers }
   );
 
   if (!treeResponse.ok) {
     throw new Error(
-      `GitHub tree error ${treeResponse.status}`
+      `GitHub tree error: ${treeResponse.status}`
     );
   }
 
   const tree = await treeResponse.json();
 
   if (tree.truncated) {
-    throw new Error("GitHub repository tree is too large");
+    throw new Error("GitHub tree is too large");
   }
 
   const files = tree.tree.filter(
@@ -170,7 +161,7 @@ async function getRepositoryTree() {
     : "";
 
   cachedTree = {
-    branch,
+    branch: repository.default_branch,
     files: new Map(
       files.map(file => [file.path, file])
     )
@@ -178,17 +169,12 @@ async function getRepositoryTree() {
 
   lastTreeFetch = Date.now();
 
-  console.log("[GITHUB] Repository loaded");
-  console.log("[GITHUB] Branch:", branch);
+  console.log("[GITHUB] Repository connected");
   console.log("[GITHUB] Index:", indexPath);
   console.log("[GITHUB] Files:", files.length);
 
   return cachedTree;
 }
-
-// =====================================
-// DOWNLOAD GITHUB FILE
-// =====================================
 
 async function getGitHubFile(filePath, tree) {
   const file = tree.files.get(filePath);
@@ -199,7 +185,7 @@ async function getGitHubFile(filePath, tree) {
     return fileCache.get(file.sha);
   }
 
-  const encodedBranch = tree.branch
+  const branch = tree.branch
     .split("/")
     .map(encodeURIComponent)
     .join("/");
@@ -210,13 +196,13 @@ async function getGitHubFile(filePath, tree) {
     .join("/");
 
   const url =
-    `https://raw.githubusercontent.com/${OWNER}/${REPO}/${encodedBranch}/${encodedPath}`;
+    `https://raw.githubusercontent.com/${OWNER}/${REPO}/${branch}/${encodedPath}`;
 
   const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(
-      `GitHub file download error ${response.status}`
+      `GitHub file error: ${response.status}`
     );
   }
 
@@ -229,21 +215,21 @@ async function getGitHubFile(filePath, tree) {
   return buffer;
 }
 
-// =====================================
-// HEALTH CHECK
-// =====================================
+// ==========================================
+// HEALTH
+// ==========================================
 
 app.get("/health", (req, res) => {
   res.json({
     status: "online",
     service: "Xblox",
-    timestamp: new Date().toISOString()
+    time: new Date().toISOString()
   });
 });
 
-// =====================================
+// ==========================================
 // FIREBASE STATUS
-// =====================================
+// ==========================================
 
 app.get("/api/firebase-status", (req, res) => {
   res.json({
@@ -257,7 +243,7 @@ app.get("/api/firebase-test", async (req, res) => {
   if (!db) {
     return res.status(503).json({
       success: false,
-      error: "Firebase is not configured"
+      error: "Firebase not configured"
     });
   }
 
@@ -266,26 +252,27 @@ app.get("/api/firebase-test", async (req, res) => {
       .doc("connection")
       .set({
         status: "online",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt:
+          admin.firestore.FieldValue.serverTimestamp()
       });
 
     res.json({
       success: true,
-      message: "Firestore connected"
+      message: "Firebase connected"
     });
   } catch (error) {
     console.error("[FIREBASE TEST]", error.message);
 
     res.status(500).json({
       success: false,
-      error: "Firebase connection failed"
+      error: "Firebase test failed"
     });
   }
 });
 
-// =====================================
+// ==========================================
 // GITHUB STATUS
-// =====================================
+// ==========================================
 
 app.get("/api/github-status", async (req, res) => {
   try {
@@ -308,9 +295,9 @@ app.get("/api/github-status", async (req, res) => {
   }
 });
 
-// =====================================
-// XPLAY PROXY
-// =====================================
+// ==========================================
+// XPLAY PROXY AND AUTH COMPATIBILITY
+// ==========================================
 
 app.use(
   "/proxy",
@@ -329,10 +316,27 @@ app.use(
     },
 
     on: {
+      proxyReq: (proxyReq, req) => {
+        // Forward existing browser session cookies.
+        if (req.headers.cookie) {
+          proxyReq.setHeader(
+            "Cookie",
+            req.headers.cookie
+          );
+        }
+      },
+
       proxyRes: responseInterceptor(
         async (buffer, proxyRes, req, res) => {
-          // Add isolation headers to proxied game responses too.
-          setIsolationHeaders(res);
+          res.setHeader(
+            "Cross-Origin-Opener-Policy",
+            "same-origin"
+          );
+
+          res.setHeader(
+            "Cross-Origin-Embedder-Policy",
+            "require-corp"
+          );
 
           const contentType =
             proxyRes.headers["content-type"] || "";
@@ -343,16 +347,16 @@ app.use(
           const isCSS =
             contentType.includes("text/css");
 
-          const isJavaScript =
+          const isJS =
             contentType.includes("javascript");
 
-          if (!isHTML && !isCSS && !isJavaScript) {
+          if (!isHTML && !isCSS && !isJS) {
             return buffer;
           }
 
           let content = buffer.toString("utf8");
 
-          // Route ordinary XPlay site references through this proxy.
+          // Rewrite upstream website references.
           content = content.replace(
             /https:\/\/xplay\.better16\.wtf/gi,
             "/proxy"
@@ -389,7 +393,7 @@ app.use(
 
         if (res && !res.headersSent) {
           res.status(502).send(
-            "XPlay proxy is temporarily unavailable."
+            "XPlay connection failed."
           );
         }
       }
@@ -397,9 +401,9 @@ app.use(
   })
 );
 
-// =====================================
-// GITHUB WEBSITE ROUTER
-// =====================================
+// ==========================================
+// GITHUB WEBSITE
+// ==========================================
 
 app.get("*", async (req, res) => {
   try {
@@ -431,10 +435,10 @@ app.get("*", async (req, res) => {
       baseDirectory &&
       !requestedPath.startsWith(baseDirectory + "/")
     ) {
-      requestedPath = `${baseDirectory}/${requestedPath}`;
+      requestedPath =
+        `${baseDirectory}/${requestedPath}`;
     }
 
-    // SPA fallback for client-side routes.
     if (
       !tree.files.has(requestedPath) &&
       !path.posix.extname(requestedPath)
@@ -448,7 +452,9 @@ app.get("*", async (req, res) => {
     );
 
     if (!file) {
-      return res.status(404).send("404 - File Not Found");
+      return res.status(404).send(
+        "404 - File Not Found"
+      );
     }
 
     const contentType =
@@ -457,17 +463,12 @@ app.get("*", async (req, res) => {
 
     res.setHeader("Content-Type", contentType);
 
-    if (requestedPath === indexPath) {
-      res.setHeader(
-        "Cache-Control",
-        "no-cache, no-store, must-revalidate"
-      );
-    } else {
-      res.setHeader(
-        "Cache-Control",
-        "public, max-age=60"
-      );
-    }
+    res.setHeader(
+      "Cache-Control",
+      requestedPath === indexPath
+        ? "no-cache, no-store, must-revalidate"
+        : "public, max-age=60"
+    );
 
     res.send(file);
   } catch (error) {
@@ -482,7 +483,7 @@ app.get("*", async (req, res) => {
       </head>
       <body>
         <h1>503 Service Unavailable</h1>
-        <p>Unable to retrieve the Xblox website from GitHub.</p>
+        <p>Unable to load the Xblox website.</p>
         <p>Please try again later.</p>
       </body>
       </html>
@@ -490,21 +491,18 @@ app.get("*", async (req, res) => {
   }
 });
 
-// =====================================
+// ==========================================
 // START SERVER
-// =====================================
+// ==========================================
 
 app.listen(PORT, () => {
   console.log("==============================");
-  console.log(" XBLOX SERVER");
+  console.log("XBLOX SERVER STARTED");
   console.log("==============================");
   console.log("Port:", PORT);
   console.log("GitHub:", `${OWNER}/${REPO}`);
-  console.log(
-    "Firebase:",
-    firebaseConnected ? "Connected" : "Not configured"
-  );
-  console.log("XPlay Proxy:", TARGET);
-  console.log("Cross-Origin Isolation: Enabled");
+  console.log("Firebase:", firebaseConnected);
+  console.log("XPlay:", TARGET);
+  console.log("Isolation: Enabled");
   console.log("==============================");
 });
