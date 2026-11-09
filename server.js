@@ -1,3 +1,4 @@
+```js
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -10,8 +11,16 @@ const TARGET = (process.env.XPLAY_TARGET || "https://xplay.better16.wtf").replac
 
 app.disable("x-powered-by");
 
+// Enable cross-origin isolation for SharedArrayBuffer and threaded WASM.
+app.use((req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
+
 // All website files are expected directly in the repository root.
-// No public/ or other folder lookup is performed.
 function rootFile(name) {
   const fullPath = path.join(ROOT, name);
   try {
@@ -21,23 +30,24 @@ function rootFile(name) {
   }
 }
 
-app.use((req, res, next) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  next();
-});
+// Apply isolation headers to upstream responses too.
+function applyIsolationHeaders(proxyRes) {
+  proxyRes.headers["cross-origin-opener-policy"] = "same-origin";
+  proxyRes.headers["cross-origin-embedder-policy"] = "require-corp";
+}
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "xblox-webplayer",
+    crossOriginIsolatedHeaders: true,
     indexFound: Boolean(rootFile("index.html")),
     styleFound: Boolean(rootFile("style.css")),
     filesServedFrom: "repository root"
   });
 });
 
-// Serve the root index.html.
+// Serve root index.html.
 app.get("/", (_req, res) => {
   const index = rootFile("index.html");
   if (!index) {
@@ -48,7 +58,7 @@ app.get("/", (_req, res) => {
   res.sendFile(index);
 });
 
-// Serve style.css from the repository root.
+// Serve root style.css.
 app.get("/style.css", (_req, res) => {
   const css = rootFile("style.css");
   if (!css) {
@@ -59,7 +69,7 @@ app.get("/style.css", (_req, res) => {
   res.type("text/css").sendFile(css);
 });
 
-// Proxy upstream player routes. The provider still controls authentication and access.
+// Shared upstream proxy for relay, content and assets.
 const upstreamProxy = createProxyMiddleware({
   target: TARGET,
   changeOrigin: true,
@@ -73,6 +83,7 @@ const upstreamProxy = createProxyMiddleware({
       proxyReq.setHeader("Host", new URL(TARGET).host);
     },
     proxyRes(proxyRes, req) {
+      applyIsolationHeaders(proxyRes);
       console.log(`[proxy response] ${proxyRes.statusCode} ${req.method} ${req.originalUrl}`);
     },
     error(err, req, res) {
@@ -87,7 +98,8 @@ const upstreamProxy = createProxyMiddleware({
   }
 });
 
-app.use("/proxy", createProxyMiddleware({
+// Proxy upstream player page under /proxy.
+const pageProxy = createProxyMiddleware({
   target: TARGET,
   changeOrigin: true,
   secure: true,
@@ -101,6 +113,7 @@ app.use("/proxy", createProxyMiddleware({
       proxyReq.setHeader("Host", new URL(TARGET).host);
     },
     proxyRes(proxyRes, req) {
+      applyIsolationHeaders(proxyRes);
       console.log(`[proxy page response] ${proxyRes.statusCode} ${req.originalUrl}`);
     },
     error(err, req, res) {
@@ -113,9 +126,11 @@ app.use("/proxy", createProxyMiddleware({
       }
     }
   }
-}));
+});
 
-// Forward local-root assets and the upstream relay/content endpoints.
+app.use("/proxy", pageProxy);
+
+// Forward local-root assets and upstream relay/content endpoints.
 app.use((req, res, next) => {
   const p = req.path;
   if (
@@ -128,8 +143,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve any other file directly from the repository root, e.g. JS, images,
-// fonts, JSON and game files. Reject traversal outside the repository root.
+// Serve other files directly from repository root.
 app.use((req, res, next) => {
   let requested;
   try {
@@ -142,6 +156,7 @@ app.use((req, res, next) => {
 
   const filePath = path.resolve(ROOT, requested);
   const relative = path.relative(ROOT, filePath);
+
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return res.sendStatus(403);
   }
@@ -158,15 +173,16 @@ app.use((_req, res) => {
 
 const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`Xblox server listening on port ${PORT}`);
-  console.log(`Serving all website files directly from: ${ROOT}`);
+  console.log(`Serving files from: ${ROOT}`);
   console.log(`index.html: ${rootFile("index.html") ? "FOUND" : "MISSING"}`);
   console.log(`style.css: ${rootFile("style.css") ? "FOUND" : "MISSING"}`);
   console.log(`Upstream: ${TARGET}`);
 });
 
-// Forward WebSocket connections for relay endpoints.
+// Forward WebSocket connections.
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "/";
+
   if (
     url.startsWith("/relay") ||
     url.startsWith("/content") ||
@@ -177,8 +193,9 @@ server.on("upgrade", (req, socket, head) => {
   } else if (url.startsWith("/proxy/")) {
     req.url = url.replace(/^\/proxy/, "") || "/";
     console.log(`[websocket proxy upgrade] ${req.url}`);
-    upstreamProxy.upgrade(req, socket, head);
+    pageProxy.upgrade(req, socket, head);
   } else {
     socket.destroy();
   }
 });
+```
