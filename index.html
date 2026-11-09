@@ -43,6 +43,18 @@ kbd{font:600 12px/1 inherit;padding:4px 7px;border-radius:4px;background:var(--p
 #kb-hints div{display:flex;align-items:center;gap:6px}
 #toast{position:fixed;z-index:15;left:50%;bottom:24px;transform:translateX(-50%);padding:10px 16px;border-radius:3px;background:rgba(23,26,24,.92);font-size:14px;pointer-events:none;transition:opacity .3s}
 #toast[hidden]{display:block;opacity:0}
+
+/* On-device diagnostic panel */
+#debug-toggle{position:fixed;z-index:30;right:12px;top:12px;border:1px solid #59635b;border-radius:7px;padding:10px 13px;background:#202720;color:#fff;font:600 14px system-ui;cursor:pointer}
+#debug-panel{position:fixed;z-index:29;top:58px;right:10px;width:min(440px,calc(100vw - 20px));max-height:72vh;overflow:auto;background:#101512;border:1px solid #465149;border-radius:9px;padding:14px;box-shadow:0 12px 36px #000b;color:#e9eee9;font:13px/1.45 ui-monospace,SFMono-Regular,monospace}
+#debug-panel[hidden]{display:none}
+#debug-panel h2{font:600 16px system-ui;margin:0 0 10px}
+#debug-panel .actions{display:flex;gap:8px;margin:10px 0}
+#debug-panel button{background:#29332c;color:#fff;border:1px solid #536057;border-radius:5px;padding:8px 10px;font:600 13px system-ui}
+#debug-results{display:grid;grid-template-columns:1fr auto;gap:6px 12px}
+#debug-results .value{color:#b8e6ae;text-align:right;overflow-wrap:anywhere}
+#debug-results .bad{color:#ff9b9b}
+#debug-log{white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px solid #39433c;margin-top:12px;padding-top:10px;color:#c7d0c8}
 @media(max-width:600px){#kb-panel{padding:16px}#kb-keys{gap:4px}#kb-keys button{height:40px;font-size:15px}}
 </style>
 </head>
@@ -73,8 +85,133 @@ kbd{font:600 12px/1 inherit;padding:4px 7px;border-radius:4px;background:var(--p
 </div>
 <div id="toast" hidden></div>
 
-<!-- The original player page is canvas-based, not an iframe. Keep these scripts beside this file. -->
-<script src="/player-cache.js" onerror="document.getElementById('error').textContent='Could not load player-cache.js from the repository root.';document.body.classList.add('failed')"></script>
-<script src="/console.js" onerror="document.getElementById('error').textContent='Could not load console.js from the repository root.';document.body.classList.add('failed')"></script>
+<button id="debug-toggle" type="button" aria-expanded="false">Debug</button>
+<section id="debug-panel" hidden aria-label="Player diagnostics">
+  <h2>Xblox player diagnostics</h2>
+  <div id="debug-results"></div>
+  <div class="actions">
+    <button id="debug-refresh" type="button">Refresh checks</button>
+    <button id="debug-clear" type="button">Clear log</button>
+  </div>
+  <div id="debug-log">Starting diagnostics…</div>
+</section>
+
+<script>
+(() => {
+  "use strict";
+  const panel = document.getElementById("debug-panel");
+  const toggle = document.getElementById("debug-toggle");
+  const results = document.getElementById("debug-results");
+  const logBox = document.getElementById("debug-log");
+  const logLines = [];
+  const scriptStates = {};
+  const scriptNames = ["player-cache.js", "console.js", "RobloxPlayerWeb.js"];
+
+  function log(message) {
+    const line = new Date().toLocaleTimeString() + " " + String(message);
+    logLines.push(line);
+    if (logLines.length > 80) logLines.shift();
+    logBox.textContent = logLines.join("\n");
+  }
+
+  function value(label, val, good) {
+    const a = document.createElement("div");
+    const b = document.createElement("div");
+    a.textContent = label;
+    b.textContent = val;
+    b.className = "value" + (good === false ? " bad" : "");
+    results.append(a, b);
+  }
+
+  function checkScript(name) {
+    const scripts = Array.from(document.scripts);
+    const script = scripts.find(s => (s.getAttribute("src") || "").includes(name));
+    if (!script) return "not included";
+    return scriptStates[name] || "loading / status unknown";
+  }
+
+  async function checkConsoleData() {
+    try {
+      const response = await fetch("/RobloxConsole.data.js", {
+        method: "HEAD",
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+      return response.status + " " + (response.ok ? "reachable" : response.statusText);
+    } catch (error) {
+      return "request failed: " + error.message;
+    }
+  }
+
+  async function refresh() {
+    results.replaceChildren();
+    value("HTTPS / secure context", String(window.isSecureContext), window.isSecureContext);
+    value("Cross-origin isolated", String(window.crossOriginIsolated), window.crossOriginIsolated);
+    value("SharedArrayBuffer", typeof window.SharedArrayBuffer,
+      typeof window.SharedArrayBuffer === "function");
+    value("Canvas element", String(!!document.getElementById("canvas")),
+      !!document.getElementById("canvas"));
+    value("player-cache.js", checkScript("player-cache.js"));
+    value("console.js", checkScript("console.js"));
+    value("RobloxPlayerWeb.js", checkScript("RobloxPlayerWeb.js"));
+    value("Module global", typeof window.Module);
+    value("RobloxConsole data", "checking…");
+    const dataStatus = await checkConsoleData();
+    value("RobloxConsole.data.js", dataStatus, dataStatus.startsWith("200"));
+    log("Diagnostics refreshed.");
+  }
+
+  toggle.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+    toggle.setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) refresh();
+  });
+  document.getElementById("debug-refresh").addEventListener("click", refresh);
+  document.getElementById("debug-clear").addEventListener("click", () => {
+    logLines.length = 0;
+    logBox.textContent = "";
+  });
+
+  window.addEventListener("error", event => {
+    if (event.target && event.target !== window) {
+      const resource = event.target.src || event.target.href || event.target.tagName;
+      log("RESOURCE ERROR: " + resource);
+    } else {
+      log("JS ERROR: " + (event.message || "Unknown error") +
+        (event.filename ? " (" + event.filename + ":" + event.lineno + ")" : ""));
+    }
+  }, true);
+
+  window.addEventListener("unhandledrejection", event => {
+    const reason = event.reason;
+    log("PROMISE ERROR: " + (reason && reason.message ? reason.message : String(reason)));
+  });
+
+  scriptNames.forEach(name => {
+    const script = Array.from(document.scripts).find(s =>
+      (s.getAttribute("src") || "").includes(name));
+    if (!script) {
+      scriptStates[name] = "not included";
+      return;
+    }
+    script.addEventListener("load", () => {
+      scriptStates[name] = "loaded";
+      log("Loaded " + name);
+    });
+    script.addEventListener("error", () => {
+      scriptStates[name] = "FAILED to load";
+      log("FAILED to load " + name);
+    });
+  });
+
+  log("Debug panel ready. Tap Refresh checks for current results.");
+  refresh();
+})();
+</script>
+
+<!-- Keep all project files in the repository root. -->
+<script src="/player-cache.js"></script>
+<script src="/console.js"></script>
+<script src="/RobloxPlayerWeb.js"></script>
 </body>
 </html>
