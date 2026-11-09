@@ -2,7 +2,7 @@
 const { createProxyMiddleware, responseInterceptor } =
     require('http-proxy-middleware');
 
-const TARGET = 'https://xplay.better16.wtf';
+const TARGET = 'https://roblox.com';
 
 app.use('/proxy', createProxyMiddleware({
     target: TARGET,
